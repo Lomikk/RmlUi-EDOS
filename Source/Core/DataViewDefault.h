@@ -18,6 +18,7 @@ public:
 	bool Initialize(DataModel& model, Element* element, const String& expression, const String& modifier) override;
 
 	StringList GetVariableNameList() const override;
+	bool HasAddressDependency(const DataAddress& address) const override;
 
 protected:
 	const String& GetModifier() const;
@@ -104,6 +105,7 @@ public:
 
 	bool Update(DataModel& model) override;
 	StringList GetVariableNameList() const override;
+	bool HasAddressDependency(const DataAddress& address) const override;
 
 protected:
 	void Release() override;
@@ -130,6 +132,7 @@ public:
 	bool Update(DataModel& model) override;
 
 	StringList GetVariableNameList() const override;
+	bool HasAddressDependency(const DataAddress& address) const override;
 
 protected:
 	void Release() override;
@@ -149,6 +152,7 @@ class DataViewAlias final : public DataView {
 public:
 	DataViewAlias(Element* element);
 	virtual StringList GetVariableNameList() const override;
+	bool HasAddressDependency(const DataAddress& address) const override;
 	bool Update(DataModel& model) override;
 	bool Initialize(DataModel& model, Element* element, const String& expression, const String& modifier) override;
 

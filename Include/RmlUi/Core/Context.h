@@ -21,6 +21,31 @@ class RenderManager;
 class TextInputHandler;
 enum class EventId : uint16_t;
 
+struct EdosDocumentLoadPerformance {
+	double instantiate_ms = 0.0;
+	double append_ms = 0.0;
+	double load_event_ms = 0.0;
+	double data_model_ms = 0.0;
+	double document_update_tree_ms = 0.0;
+	double document_layout_ms = 0.0;
+	double document_position_ms = 0.0;
+	double other_ms = 0.0;
+	double total_ms = 0.0;
+};
+
+struct EdosContextUpdatePerformance {
+	double scroll_ms = 0.0;
+	double hover_ms = 0.0;
+	double data_model_ms = 0.0;
+	double root_update_ms = 0.0;
+	double layout_ms = 0.0;
+    int layout_documents = 0;
+	double position_ms = 0.0;
+	double release_ms = 0.0;
+	double other_ms = 0.0;
+	double total_ms = 0.0;
+};
+
 /**
     A context for storing, rendering, and processing RML documents. Multiple contexts can exist simultaneously.
  */
@@ -56,6 +81,12 @@ public:
 	/// Updates all elements in the context's documents.
 	/// This must be called before Context::Render, but after any elements have been changed, added, or removed.
 	bool Update();
+	/// EDOS diagnostic extension: detailed timings from the most recent Context::Update().
+	const EdosContextUpdatePerformance& GetEdosLastUpdatePerformance() const;
+	/// EDOS diagnostic extension: detailed timings from the most recent document load.
+	const EdosDocumentLoadPerformance& GetEdosLastDocumentLoadPerformance() const;
+    /// EDOS host extension: consume initial DataModel dirtiness already applied during document loading.
+    void EdosClearDataModelDirtyVariables();
 	/// Renders all visible elements in the context's documents.
 	bool Render();
 
@@ -387,6 +418,9 @@ private:
 	// Time in seconds until Update and Render should be called again. This allows applications to only redraw the ui if needed.
 	// See RequestNextUpdate() and NextUpdateRequested() for details.
 	double next_update_timeout = 0;
+
+	EdosContextUpdatePerformance edos_last_update_performance;
+	EdosDocumentLoadPerformance edos_last_document_load_performance;
 
 	// Internal callback for when an element is detached or removed from the hierarchy.
 	void OnElementDetach(Element* element);

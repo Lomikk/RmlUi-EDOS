@@ -41,6 +41,12 @@ StringList DataViewCommon::GetVariableNameList() const
 	return expression->GetVariableNameList();
 }
 
+bool DataViewCommon::HasAddressDependency(const DataAddress& address) const
+{
+	RMLUI_ASSERT(expression);
+	return expression->HasAddressDependency(address);
+}
+
 const String& DataViewCommon::GetModifier() const
 {
 	return modifier;
@@ -368,7 +374,11 @@ bool DataViewText::Update(DataModel& model)
 			if (SystemInterface* system_interface = GetSystemInterface())
 				system_interface->TranslateString(text, new_text);
 
-			rmlui_static_cast<ElementText*>(element)->SetText(text);
+			ElementText* element_text = rmlui_static_cast<ElementText*>(element);
+			Element* parent = element_text->GetParentNode();
+			const bool layout_stable_text = parent && parent->HasAttribute("data-edos-layout-stable-text");
+			if (!layout_stable_text || !element_text->SetTextPreserveLayout(text))
+				element_text->SetText(text);
 		}
 		else
 		{
@@ -393,6 +403,17 @@ StringList DataViewText::GetVariableNameList() const
 	}
 
 	return full_list;
+}
+
+bool DataViewText::HasAddressDependency(const DataAddress& address) const
+{
+	for (const DataEntry& entry : data_entries)
+	{
+		RMLUI_ASSERT(entry.data_expression);
+		if (entry.data_expression->HasAddressDependency(address))
+			return true;
+	}
+	return false;
 }
 
 void DataViewText::Release()
@@ -548,6 +569,20 @@ StringList DataViewFor::GetVariableNameList() const
 	return StringList{container_address.front().name};
 }
 
+bool DataViewFor::HasAddressDependency(const DataAddress& address) const
+{
+	if (address.empty())
+		return false;
+
+	for (size_t i = 0; i < Math::Min(address.size(), container_address.size()); i++)
+	{
+		if (container_address[i] != address[i])
+			return false;
+	}
+
+	return true;
+}
+
 void DataViewFor::Release()
 {
 	delete this;
@@ -576,6 +611,11 @@ DataViewAlias::DataViewAlias(Element* element) : DataView(element, 0) {}
 StringList DataViewAlias::GetVariableNameList() const
 {
 	return variables;
+}
+
+bool DataViewAlias::HasAddressDependency(const DataAddress& /*address*/) const
+{
+	return true;
 }
 
 bool DataViewAlias::Update(DataModel&)

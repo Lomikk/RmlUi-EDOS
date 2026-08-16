@@ -116,6 +116,67 @@ void ElementText::SetText(const String& _text)
 	}
 }
 
+bool ElementText::SetTextPreserveLayout(const String& _text)
+{
+	if (text == _text)
+		return true;
+
+	// This is intentionally conservative. The caller promises that the parent
+	// box is layout-stable; here we additionally require a single nowrap text
+	// fragment with no text transform. The parent box stays fixed, while the
+	// text run is re-measured and re-aligned locally inside that box.
+	const auto& computed = GetComputedValues();
+	Element* parent = GetParentNode();
+	if (lines.size() != 1 || computed.white_space() != Style::WhiteSpace::Nowrap ||
+		computed.text_transform() != Style::TextTransform::None || !parent ||
+		GetOffsetParent() != parent || parent->GetNumChildren() != 1 || parent->GetChild(0) != this ||
+		GetPosition() != Style::Position::Static)
+	{
+		return false;
+	}
+
+	const FontFaceHandle font_face_handle = GetFontFaceHandle();
+	if (font_face_handle == 0)
+		return false;
+
+	const Box& parent_box = parent->GetBox();
+	const float available_width = parent_box.GetSize().x;
+	if (available_width < 0.f)
+		return false;
+
+	const TextShapingContext text_shaping_context{computed.language(), computed.direction(), computed.font_kerning(), computed.letter_spacing()};
+	const float text_width = float(GetFontEngineInterface()->GetStringWidth(font_face_handle, _text, text_shaping_context));
+
+	float alignment_offset = 0.f;
+	if (text_width < available_width)
+	{
+		switch (parent->GetComputedValues().text_align())
+		{
+		case Style::TextAlign::Center: alignment_offset = 0.5f * (available_width - text_width); break;
+		case Style::TextAlign::Right: alignment_offset = available_width - text_width; break;
+		case Style::TextAlign::Left:
+		case Style::TextAlign::Justify: break;
+		}
+	}
+
+	// The line position is relative to this ElementText. Horizontal text-align
+	// is normally baked into the element offset by LineBox::Close(). Recreate
+	// only that offset here, while preserving the existing vertical baseline.
+	const float content_left = parent_box.GetPosition(BoxArea::Content).x;
+	const float new_offset_x = content_left + alignment_offset - lines[0].position.x;
+	SetOffset({new_offset_x, GetOffsetTop()}, parent);
+
+	text = _text;
+	lines[0].text = _text;
+	lines[0].width = text_width;
+	geometry_dirty = true;
+
+	if (decoration_property != Style::TextDecoration::None)
+		generated_decoration = Style::TextDecoration::None;
+
+	return true;
+}
+
 const String& ElementText::GetText() const
 {
 	return text;

@@ -17,6 +17,7 @@
 #include "ScrollController.h"
 #include "StreamFile.h"
 #include <algorithm>
+#include <chrono>
 #include <clocale>
 #include <iterator>
 #include <limits>
@@ -31,6 +32,13 @@ static constexpr float UNIT_SCROLL_LENGTH = 80.f;   // [dp]
 static constexpr float SCROLL_INERTIA_DELAY = 0.1f;
 static constexpr float TOUCH_MOVEMENT_DECAY_RATE = 5.0f;
 static constexpr float TOUCH_CLICK_MAX_DISTANCE = DOUBLE_CLICK_MAX_DIST; // [dp]
+
+using EdosPerformanceClock = std::chrono::steady_clock;
+
+static double EdosElapsedMilliseconds(EdosPerformanceClock::time_point start)
+{
+	return std::chrono::duration<double, std::milli>(EdosPerformanceClock::now() - start).count();
+}
 
 static void DebugVerifyLocaleSetting()
 {
@@ -177,20 +185,34 @@ float Context::GetDensityIndependentPixelRatio() const
 bool Context::Update()
 {
 	RMLUI_ZoneScoped;
+	const auto total_started = EdosPerformanceClock::now();
+	EdosContextUpdatePerformance timing;
 	DebugVerifyLocaleSetting();
 
 	next_update_timeout = std::numeric_limits<double>::infinity();
 
-	if (scroll_controller->Update(mouse_position, density_independent_pixel_ratio))
-		RequestNextUpdate(0);
+	{
+		const auto started = EdosPerformanceClock::now();
+		if (scroll_controller->Update(mouse_position, density_independent_pixel_ratio))
+			RequestNextUpdate(0);
+		timing.scroll_ms = EdosElapsedMilliseconds(started);
+	}
 
 	// Update the hover chain to detect any new or moved elements under the mouse.
-	if (mouse_active)
-		UpdateHoverChain(mouse_position);
+	{
+		const auto started = EdosPerformanceClock::now();
+		if (mouse_active)
+			UpdateHoverChain(mouse_position);
+		timing.hover_ms = EdosElapsedMilliseconds(started);
+	}
 
 	// Update all the data models before updating properties and layout.
-	for (auto& data_model : data_models)
-		data_model.second->Update(true);
+	{
+		const auto started = EdosPerformanceClock::now();
+		for (auto& data_model : data_models)
+			data_model.second->Update(true);
+		timing.data_model_ms = EdosElapsedMilliseconds(started);
+	}
 
 	// The style definition of each document should be independent of each other. By manually resetting these flags we avoid unnecessary definition
 	// lookups in unrelated documents, such as when adding a new document. Adding an element dirties the parent definition, which in this case is the
@@ -198,21 +220,59 @@ bool Context::Update()
 	root->dirty_definition = false;
 	root->dirty_child_definitions = false;
 
-	root->Update(density_independent_pixel_ratio, Vector2f(dimensions));
+	{
+		const auto started = EdosPerformanceClock::now();
+		root->Update(density_independent_pixel_ratio, Vector2f(dimensions));
+		timing.root_update_ms = EdosElapsedMilliseconds(started);
+	}
 
 	for (int i = 0; i < root->GetNumChildren(); ++i)
 	{
 		if (auto doc = root->GetChild(i)->GetOwnerDocument())
 		{
+            if (doc->IsLayoutDirty())
+                timing.layout_documents++;
+
+			auto started = EdosPerformanceClock::now();
 			doc->UpdateLayout();
+			timing.layout_ms += EdosElapsedMilliseconds(started);
+
+			started = EdosPerformanceClock::now();
 			doc->UpdatePosition();
+			timing.position_ms += EdosElapsedMilliseconds(started);
 		}
 	}
 
 	// Release any documents that were unloaded during the update.
-	ReleaseUnloadedDocuments();
+	{
+		const auto started = EdosPerformanceClock::now();
+		ReleaseUnloadedDocuments();
+		timing.release_ms = EdosElapsedMilliseconds(started);
+	}
+
+	timing.total_ms = EdosElapsedMilliseconds(total_started);
+	const double accounted_ms = timing.scroll_ms + timing.hover_ms + timing.data_model_ms + timing.root_update_ms + timing.layout_ms +
+		timing.position_ms + timing.release_ms;
+	timing.other_ms = Math::Max(0.0, timing.total_ms - accounted_ms);
+	edos_last_update_performance = timing;
 
 	return true;
+}
+
+const EdosContextUpdatePerformance& Context::GetEdosLastUpdatePerformance() const
+{
+	return edos_last_update_performance;
+}
+
+const EdosDocumentLoadPerformance& Context::GetEdosLastDocumentLoadPerformance() const
+{
+	return edos_last_document_load_performance;
+}
+
+void Context::EdosClearDataModelDirtyVariables()
+{
+    for (auto& data_model : data_models)
+        data_model.second->EdosClearDirtyVariables();
 }
 
 bool Context::Render()
@@ -277,31 +337,64 @@ ElementDocument* Context::LoadDocument(const String& document_path)
 
 ElementDocument* Context::LoadDocument(Stream* stream)
 {
+	const auto total_started = EdosPerformanceClock::now();
+	EdosDocumentLoadPerformance timing;
 	DebugVerifyLocaleSetting();
 	PluginRegistry::NotifyDocumentOpen(this, stream->GetSourceURL().GetURL());
 
+	auto started = EdosPerformanceClock::now();
 	ElementPtr element = Factory::InstanceDocumentStream(this, stream, GetDocumentsBaseTag());
+	timing.instantiate_ms = EdosElapsedMilliseconds(started);
 	if (!element)
+	{
+		timing.total_ms = EdosElapsedMilliseconds(total_started);
+		timing.other_ms = Math::Max(0.0, timing.total_ms - timing.instantiate_ms);
+		edos_last_document_load_performance = timing;
 		return nullptr;
+	}
 
 	ElementDocument* document = rmlui_static_cast<ElementDocument*>(element.get());
 
+	started = EdosPerformanceClock::now();
 	root->AppendChild(std::move(element));
+	timing.append_ms = EdosElapsedMilliseconds(started);
 
 	// The 'load' event is fired before updating the document, because the user might
 	// need to initalize things before running an update. The drawback is that computed
 	// values and layouting are not performed yet, resulting in default values when
 	// querying such information in the event handler.
+	started = EdosPerformanceClock::now();
 	PluginRegistry::NotifyDocumentLoad(document);
 	document->DispatchEvent(EventId::Load, Dictionary());
+	timing.load_event_ms = EdosElapsedMilliseconds(started);
 
 	// Data models are updated after the 'load' event so that the user has a chance to change
 	// any data variables first. We do not clear dirty variables here, since users may need to
 	// retrieve whether or not eg. a data variable has changed in a controller.
+	started = EdosPerformanceClock::now();
 	for (auto& data_model : data_models)
 		data_model.second->Update(false);
+	timing.data_model_ms = EdosElapsedMilliseconds(started);
 
-	document->UpdateDocument();
+	const float dp_ratio = GetDensityIndependentPixelRatio();
+	const Vector2f vp_dimensions = Vector2f(GetDimensions());
+	started = EdosPerformanceClock::now();
+	document->Update(dp_ratio, vp_dimensions);
+	timing.document_update_tree_ms = EdosElapsedMilliseconds(started);
+
+	started = EdosPerformanceClock::now();
+	document->UpdateLayout();
+	timing.document_layout_ms = EdosElapsedMilliseconds(started);
+
+	started = EdosPerformanceClock::now();
+	document->UpdatePosition();
+	timing.document_position_ms = EdosElapsedMilliseconds(started);
+
+	timing.total_ms = EdosElapsedMilliseconds(total_started);
+	const double accounted_ms = timing.instantiate_ms + timing.append_ms + timing.load_event_ms + timing.data_model_ms +
+		timing.document_update_tree_ms + timing.document_layout_ms + timing.document_position_ms;
+	timing.other_ms = Math::Max(0.0, timing.total_ms - accounted_ms);
+	edos_last_document_load_performance = timing;
 
 	return document;
 }
