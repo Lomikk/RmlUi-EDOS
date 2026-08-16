@@ -1,4 +1,5 @@
 #include "DataView.h"
+#include "DataModel.h"
 #include "../../Include/RmlUi/Core/Element.h"
 #include <algorithm>
 
@@ -89,9 +90,16 @@ bool DataViews::Update(DataModel& model, const DirtyVariables& dirty_variables)
 
 		for (const String& variable_name : dirty_variables)
 		{
-			auto pair = name_view_map.equal_range(variable_name);
+			DataAddress address = model.ResolveAddress(variable_name, nullptr);
+			if (address.empty())
+				continue;
+
+			auto pair = name_view_map.equal_range(address.front().name);
 			for (auto it = pair.first; it != pair.second; ++it)
-				dirty_views.push_back(it->second);
+			{
+				if (address.size() <= 1 || it->second->HasAddressDependency(address))
+					dirty_views.push_back(it->second);
+			}
 		}
 
 		// Remove duplicate entries
