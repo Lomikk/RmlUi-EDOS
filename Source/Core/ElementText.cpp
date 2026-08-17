@@ -118,6 +118,73 @@ void ElementText::SetText(const String& _text)
 	}
 }
 
+bool ElementText::SetTextPreserveLayout(const String& _text)
+{
+	if (text == _text)
+		return true;
+
+	// This path is deliberately narrower than normal SetText(). The marker is
+	// only a request: the resolved DOM must also prove that text cannot change
+	// surrounding layout. In particular, an auto-sized span is not stable even
+	// when an outer table cell happens to have a fixed width.
+	const auto& computed = GetComputedValues();
+	Element* parent = GetParentNode();
+	if (lines.size() != 1 || computed.white_space() != Style::WhiteSpace::Nowrap ||
+		computed.text_transform() != Style::TextTransform::None || !parent || GetOffsetParent() != parent ||
+		parent->GetNumChildren() != 1 || parent->GetChild(0) != this || GetPosition() != Style::Position::Static)
+	{
+		return false;
+	}
+
+	// Require a definite fixed-width text slot. Percentage and auto widths can
+	// still depend on surrounding layout, so they intentionally fall back to
+	// the regular SetText() path.
+	const Style::LengthPercentageAuto parent_width = parent->GetComputedValues().width();
+	if (parent_width.type != Style::LengthPercentageAuto::Length)
+		return false;
+
+	const FontFaceHandle font_face_handle = GetFontFaceHandle();
+	if (font_face_handle == 0)
+		return false;
+
+	const Box& parent_box = parent->GetBox();
+	const float available_width = parent_box.GetSize().x;
+	if (available_width < 0.f)
+		return false;
+
+	const TextShapingContext text_shaping_context{
+		computed.language(), computed.direction(), computed.font_kerning(), computed.letter_spacing()};
+	const float text_width = float(GetFontEngineInterface()->GetStringWidth(font_face_handle, _text, text_shaping_context));
+	if (text_width > available_width)
+		return false;
+
+	float alignment_offset = 0.f;
+	switch (parent->GetComputedValues().text_align())
+	{
+	case Style::TextAlign::Center: alignment_offset = 0.5f * (available_width - text_width); break;
+	case Style::TextAlign::Right: alignment_offset = available_width - text_width; break;
+	case Style::TextAlign::Left:
+	case Style::TextAlign::Justify: break;
+	}
+
+	// LineBox::Close() normally bakes horizontal text alignment into the text
+	// element offset. Recreate only that local offset while preserving the
+	// existing vertical baseline and the parent's already resolved box.
+	const float content_left = parent_box.GetPosition(BoxArea::Content).x;
+	const float new_offset_x = content_left + alignment_offset - lines[0].position.x;
+	SetOffset({new_offset_x, GetOffsetTop()}, parent);
+
+	text = _text;
+	lines[0].text = _text;
+	lines[0].width = int(text_width);
+	geometry_dirty = true;
+
+	if (decoration_property != Style::TextDecoration::None)
+		generated_decoration = Style::TextDecoration::None;
+
+	return true;
+}
+
 const String& ElementText::GetText() const
 {
 	return text;

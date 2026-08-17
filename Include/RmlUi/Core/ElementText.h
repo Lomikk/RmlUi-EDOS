@@ -15,6 +15,9 @@ public:
 
 	/// Sets the raw string this text element contains. The actual rendered text may be different due to whitespace formatting.
 	void SetText(const String& text);
+	/// Updates an already laid-out single-line text run inside an explicitly fixed-width parent without dirtying document layout.
+	/// Returns false when the current text or layout state is not safe for this fast path.
+	bool SetTextPreserveLayout(const String& text);
 	/// Returns the raw string this text element contains.
 	const String& GetText() const;
 
