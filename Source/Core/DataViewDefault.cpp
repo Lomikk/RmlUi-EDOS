@@ -374,11 +374,7 @@ bool DataViewText::Update(DataModel& model)
 			if (SystemInterface* system_interface = GetSystemInterface())
 				system_interface->TranslateString(text, new_text);
 
-			ElementText* element_text = rmlui_static_cast<ElementText*>(element);
-			Element* parent = element_text->GetParentNode();
-			const bool layout_stable_text = parent && parent->HasAttribute("data-edos-layout-stable-text");
-			if (!layout_stable_text || !element_text->SetTextPreserveLayout(text))
-				element_text->SetText(text);
+			rmlui_static_cast<ElementText*>(element)->SetText(text);
 		}
 		else
 		{
