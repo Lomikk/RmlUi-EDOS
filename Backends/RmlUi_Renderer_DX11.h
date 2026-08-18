@@ -47,6 +47,26 @@ public:
 	void SetViewport(int width, int height);
 	void RestorePartialRenderState();
 
+	// Engine-integration hook: replace the default orthographic projection used
+	// by SetViewport(). The caller owns the complete mapping from RmlUi local
+	// coordinates to clip space. Existing RmlUi transforms are still composed
+	// after this projection by SetTransform().
+	void SetProjectionMatrix(const Rml::Matrix4f& projection)
+	{
+		m_projection = projection;
+		SetTransform(nullptr);
+	}
+
+	// Engine-integration hook: bind a caller-owned render target for subsequent
+	// root RenderInterface draws. This deliberately does not change the internal
+	// layer stack; engines that need nested layers to composite into an external
+	// root must provide a layer-stack integration separately.
+	void BindExternalRenderTarget(ID3D11RenderTargetView* render_target_view, ID3D11DepthStencilView* depth_stencil_view = nullptr)
+	{
+		RMLUI_ASSERTMSG(render_target_view, "render_target_view cannot be nullptr!");
+		m_d3d_context->OMSetRenderTargets(1, &render_target_view, depth_stencil_view);
+	}
+
 	// -- Inherited from Rml::RenderInterface --
 
 	Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) override;
