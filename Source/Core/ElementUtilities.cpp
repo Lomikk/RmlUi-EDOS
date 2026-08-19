@@ -125,6 +125,15 @@ bool ElementUtilities::GetClippingRegion(Element* element, Rectanglei& out_clip_
 
 	int num_ignored_clips = target_element_clip.GetNumber();
 
+	// Some renderers apply a global/application-side projection which is not an
+	// RmlUi element transform. In that case ordinary window-space scissor regions
+	// cannot represent the final render-space clip. Let Core keep ownership of
+	// clipping-ancestor discovery and emit its native ClipMaskGeometry instead.
+	// Only rendering callers request an output mask list, so hit testing retains
+	// the ordinary axis-aligned rectangle path.
+	const bool prefer_clip_mask_for_scissor = out_clip_mask_list && element->GetContext() &&
+		element->GetContext()->GetRenderManager().PreferClipMaskForScissorRegions();
+
 	// Search through the element's ancestors, finding all elements that clip their overflow and have overflow to clip.
 	// For each that we find, we combine their clipping region with the existing clipping region, and so build up a
 	// complete clipping region for the element.
@@ -159,7 +168,7 @@ bool ElementUtilities::GetClippingRegion(Element* element, Rectanglei& out_clip_
 
 				// If the element has border-radius we always use a clip mask, since we can't easily predict if content is located on the curved
 				// region to be clipped. If the element has a transform we only use a clip mask when the content clips.
-				if (has_border_radius || (transform && has_clipping_content))
+				if (has_border_radius || ((transform || prefer_clip_mask_for_scissor) && has_clipping_content))
 				{
 					Geometry* clip_geometry = clipping_element->GetElementBackgroundBorder()->GetClipGeometry(clipping_element, clip_area);
 					const ClipMaskOperation clip_operation = (out_clip_mask_list->empty() ? ClipMaskOperation::Set : ClipMaskOperation::Intersect);
@@ -171,7 +180,7 @@ bool ElementUtilities::GetClippingRegion(Element* element, Rectanglei& out_clip_
 				// If we only have border-radius then we add this element to the scissor region as well as the clip mask. This may help with e.g.
 				// culling text render calls. However, when we have a transform, the element cannot be added to the scissor region since its geometry
 				// may be projected entirely elsewhere.
-				if (transform)
+				if (transform || (prefer_clip_mask_for_scissor && has_clipping_content))
 					disable_scissor_clipping = true;
 			}
 

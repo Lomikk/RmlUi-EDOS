@@ -116,6 +116,11 @@ Rectanglei RenderManager::GetScissorRegion() const
 	return state.scissor_region;
 }
 
+bool RenderManager::PreferClipMaskForScissorRegions() const
+{
+	return render_interface->PreferClipMaskForScissorRegions();
+}
+
 void RenderManager::DisableClipMask()
 {
 	if (!state.clip_mask_list.empty())

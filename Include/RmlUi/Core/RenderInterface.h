@@ -69,6 +69,13 @@ public:
 	/// @note The region should be applied in window coordinates regardless of any active transform.
 	virtual void SetScissorRegion(Rectanglei region) = 0;
 
+	/// Returns true when ordinary clipping regions should be represented through
+	/// the clip-mask geometry path instead of hardware scissor regions.
+	/// @note The default is false. This is useful for renderers applying an
+	/// application-side/global projection which is intentionally invisible to
+	/// RmlUi's element transform and layout model.
+	virtual bool PreferClipMaskForScissorRegions() const;
+
 	/**
 	    @name Optional functions for advanced rendering features.
 	 */
