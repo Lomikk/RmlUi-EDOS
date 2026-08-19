@@ -89,7 +89,7 @@ public:
 	// Can be passed to RenderGeometry() to not touch the cbuffers
 	static constexpr Rml::TextureHandle TexturePostprocessNoBinding = Rml::TextureHandle(-3);
 
-private:
+protected:
 	// Changes blend state if necessary
 	void SetBlendState(ID3D11BlendState* blend_state);
 	void DisableBlend();
