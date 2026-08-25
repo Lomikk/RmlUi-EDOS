@@ -70,7 +70,7 @@ void ElementEffects::InstanceEffects()
 			RMLUI_ASSERT(decorator_list.empty() || decorator_list.size() == decorators_ptr->list.size());
 
 			DecoratorEntryList& decorators_target = (id == PropertyId::Decorator ? decorators : mask_images);
-			decorators_target.reserve(decorators_ptr->list.size());
+			decorators_target.reserve(decorator_list.size());
 
 			for (size_t i = 0; i < decorator_list.size() && i < decorators_ptr->list.size(); i++)
 			{
@@ -210,12 +210,26 @@ void ElementEffects::RenderEffects(RenderStage render_stage)
 		return;
 
 	Rectanglei initial_scissor_region = render_manager->GetScissorRegion();
+	const bool prefer_clip_mask_for_scissor = render_manager->PreferClipMaskForScissorRegions();
 
-	auto ApplyClippingRegion = [this, &render_manager](PropertyId filter_id) {
+	auto ApplyClippingRegion = [this, &render_manager, prefer_clip_mask_for_scissor](PropertyId filter_id) {
 		RMLUI_ASSERT(filter_id == PropertyId::Filter || filter_id == PropertyId::BackdropFilter);
 
 		const bool force_clip_to_self_border_box = (filter_id == PropertyId::BackdropFilter);
 		ElementUtilities::SetClippingRegion(element, force_clip_to_self_border_box);
+
+		// Filters are implemented by the reference renderers as fullscreen
+		// postprocess passes. The filter scissor below is a window-space
+		// performance optimization, not the semantic clip. A renderer which
+		// applies a global/application-side projection cannot project that
+		// rectangle correctly because the projection is intentionally invisible
+		// to Core. In that mode, preserve Core's clip-mask/stencil output above
+		// and let the stock filter pass cover the viewport.
+		if (prefer_clip_mask_for_scissor)
+		{
+			render_manager->DisableScissorRegion();
+			return;
+		}
 
 		// Find the region being affected by the active filters and apply it as a scissor.
 		Rectanglef filter_region = Rectanglef::MakeInvalid();
@@ -233,7 +247,17 @@ void ElementEffects::RenderEffects(RenderStage render_stage)
 		Rectanglei scissor_region = Rectanglei(filter_region).IntersectIfValid(render_manager->GetScissorRegion());
 		render_manager->SetScissorRegion(scissor_region);
 	};
-	auto ApplyScissorRegionForBackdrop = [this, &render_manager]() {
+	auto ApplyScissorRegionForBackdrop = [this, &render_manager, prefer_clip_mask_for_scissor]() {
+		// The extended backdrop scissor is likewise only an input-work bound.
+		// With a global projection, read the full source layer and let the
+		// subsequent ApplyClippingRegion(BackdropFilter) clip the destination
+		// through Core's clip-mask geometry.
+		if (prefer_clip_mask_for_scissor)
+		{
+			render_manager->DisableScissorRegion();
+			return;
+		}
+
 		// Set the scissor region for backdrop drawing, which covers the element's border box plus any area we may need
 		// to read from, such as any blur radius.
 		Rectanglef filter_region = Rectanglef::MakeInvalid();
