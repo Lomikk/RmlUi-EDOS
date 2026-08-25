@@ -215,19 +215,11 @@ void ElementEffects::RenderEffects(RenderStage render_stage)
 		const bool force_clip_to_self_border_box = (filter_id == PropertyId::BackdropFilter);
 		ElementUtilities::SetClippingRegion(element, force_clip_to_self_border_box);
 
-		// Reference renderers use this rectangle as the valid sampling/work
-		// window for fullscreen filter passes, while the semantic destination
-		// clip is carried separately through clip-mask/stencil geometry. A
-		// renderer-driven global projection cannot use the element-local
-		// window rectangle, but blur/drop-shadow still require a valid region.
-		// Keep the stock sampling contract by widening it to the full viewport;
-		// Core's clip mask above remains the visible clipping boundary.
-		if (prefer_clip_mask_for_scissor)
-		{
-			render_manager->SetScissorRegion(Rectanglei::FromSize(render_manager->GetViewport()));
-			return;
-		}
-
+		// Keep the stock filter sampling/work rectangle even when ordinary
+		// element clipping is represented by clip-mask geometry. Renderers with
+		// a hidden application/global projection can map this logical window
+		// rectangle to their final viewport at execution time, while the Core
+		// clip mask remains the exact semantic destination boundary.
 		Rectanglef filter_region = Rectanglef::MakeInvalid();
 		ElementUtilities::GetBoundingBox(filter_region, element, force_clip_to_self_border_box ? BoxArea::Border : BoxArea::Auto);
 
@@ -243,15 +235,11 @@ void ElementEffects::RenderEffects(RenderStage render_stage)
 		render_manager->SetScissorRegion(scissor_region);
 	};
 	auto ApplyScissorRegionForBackdrop = [this, &render_manager, prefer_clip_mask_for_scissor]() {
-		// Backdrop input filters also require a valid sampling window. Under a
-		// global projection read the full viewport, then let the following
-		// ApplyClippingRegion(BackdropFilter) apply the semantic Core mask.
-		if (prefer_clip_mask_for_scissor)
-		{
-			render_manager->SetScissorRegion(Rectanglei::FromSize(render_manager->GetViewport()));
-			return;
-		}
-
+		// Backdrop needs the larger source-read window, including ink overflow.
+		// Under a renderer-driven global projection this logical rectangle is
+		// still preserved in the command stream and projected by the renderer;
+		// the later ApplyClippingRegion(BackdropFilter) supplies the separate
+		// semantic output clip through Core clip-mask geometry.
 		Rectanglef filter_region = Rectanglef::MakeInvalid();
 		ElementUtilities::GetBoundingBox(filter_region, element, BoxArea::Border);
 		for (const auto& filter : backdrop_filters)
