@@ -70,7 +70,7 @@ void ElementEffects::InstanceEffects()
 			RMLUI_ASSERT(decorator_list.empty() || decorator_list.size() == decorators_ptr->list.size());
 
 			DecoratorEntryList& decorators_target = (id == PropertyId::Decorator ? decorators : mask_images);
-			decorators_target.reserve(decorator_list.size());
+			decorators_target.reserve(decorators_ptr->list.size());
 
 			for (size_t i = 0; i < decorator_list.size() && i < decorators_ptr->list.size(); i++)
 			{
@@ -141,7 +141,6 @@ void ElementEffects::ReloadEffectsData()
 				if (!decorator.decorator_data)
 					decorator_data_failed = true;
 
-				// Release old element data after generating new data, so that the decorator can reuse any cache.
 				if (old_data)
 					decorator.decorator->ReleaseElementData(old_data);
 			}
@@ -191,8 +190,6 @@ void ElementEffects::RenderEffects(RenderStage render_stage)
 	{
 		if (render_stage == RenderStage::Decoration)
 		{
-			// Render the decorators attached to this element in its current state.
-			// Render from back to front for correct render order.
 			for (int i = (int)decorators.size() - 1; i >= 0; i--)
 			{
 				DecoratorEntry& decorator = decorators[i];
@@ -218,24 +215,22 @@ void ElementEffects::RenderEffects(RenderStage render_stage)
 		const bool force_clip_to_self_border_box = (filter_id == PropertyId::BackdropFilter);
 		ElementUtilities::SetClippingRegion(element, force_clip_to_self_border_box);
 
-		// Filters are implemented by the reference renderers as fullscreen
-		// postprocess passes. The filter scissor below is a window-space
-		// performance optimization, not the semantic clip. A renderer which
-		// applies a global/application-side projection cannot project that
-		// rectangle correctly because the projection is intentionally invisible
-		// to Core. In that mode, preserve Core's clip-mask/stencil output above
-		// and let the stock filter pass cover the viewport.
+		// Reference renderers use this rectangle as the valid sampling/work
+		// window for fullscreen filter passes, while the semantic destination
+		// clip is carried separately through clip-mask/stencil geometry. A
+		// renderer-driven global projection cannot use the element-local
+		// window rectangle, but blur/drop-shadow still require a valid region.
+		// Keep the stock sampling contract by widening it to the full viewport;
+		// Core's clip mask above remains the visible clipping boundary.
 		if (prefer_clip_mask_for_scissor)
 		{
-			render_manager->DisableScissorRegion();
+			render_manager->SetScissorRegion(Rectanglei::FromSize(render_manager->GetViewport()));
 			return;
 		}
 
-		// Find the region being affected by the active filters and apply it as a scissor.
 		Rectanglef filter_region = Rectanglef::MakeInvalid();
 		ElementUtilities::GetBoundingBox(filter_region, element, force_clip_to_self_border_box ? BoxArea::Border : BoxArea::Auto);
 
-		// The filter property may draw outside our normal clipping region due to ink overflow.
 		if (filter_id == PropertyId::Filter)
 		{
 			for (const auto& filter : filters)
@@ -248,18 +243,15 @@ void ElementEffects::RenderEffects(RenderStage render_stage)
 		render_manager->SetScissorRegion(scissor_region);
 	};
 	auto ApplyScissorRegionForBackdrop = [this, &render_manager, prefer_clip_mask_for_scissor]() {
-		// The extended backdrop scissor is likewise only an input-work bound.
-		// With a global projection, read the full source layer and let the
-		// subsequent ApplyClippingRegion(BackdropFilter) clip the destination
-		// through Core's clip-mask geometry.
+		// Backdrop input filters also require a valid sampling window. Under a
+		// global projection read the full viewport, then let the following
+		// ApplyClippingRegion(BackdropFilter) apply the semantic Core mask.
 		if (prefer_clip_mask_for_scissor)
 		{
-			render_manager->DisableScissorRegion();
+			render_manager->SetScissorRegion(Rectanglei::FromSize(render_manager->GetViewport()));
 			return;
 		}
 
-		// Set the scissor region for backdrop drawing, which covers the element's border box plus any area we may need
-		// to read from, such as any blur radius.
 		Rectanglef filter_region = Rectanglef::MakeInvalid();
 		ElementUtilities::GetBoundingBox(filter_region, element, BoxArea::Border);
 		for (const auto& filter : backdrop_filters)
@@ -281,11 +273,6 @@ void ElementEffects::RenderEffects(RenderStage render_stage)
 		{
 			const LayerHandle backdrop_destination_layer = render_manager->GetTopLayer();
 
-			// @performance We strictly only need this temporary buffer when having to read from outside the element
-			// boundaries, which currently only applies to blur and drop-shadow. Alternatively, we could avoid this
-			// completely if we introduced a render interface API concept of different input and output clipping. That
-			// is, we set a large input scissor to cover all input data, which can be used e.g. during blurring, and use
-			// our small border-area-only clipping region for the composite layers output.
 			ApplyScissorRegionForBackdrop();
 			render_manager->PushLayer();
 			const LayerHandle backdrop_temp_layer = render_manager->GetTopLayer();
@@ -294,10 +281,8 @@ void ElementEffects::RenderEffects(RenderStage render_stage)
 			for (auto& filter : backdrop_filters)
 				filter.compiled.AddHandleTo(filter_handles);
 
-			// Render the backdrop filters in the extended scissor region including any ink overflow.
 			render_manager->CompositeLayers(backdrop_source_layer, backdrop_temp_layer, BlendMode::Blend, filter_handles);
 
-			// Then composite the filter output to our destination while applying our clipping region, including any border-radius.
 			ApplyClippingRegion(PropertyId::BackdropFilter);
 			render_manager->CompositeLayers(backdrop_temp_layer, backdrop_destination_layer, BlendMode::Blend, {});
 			render_manager->PopLayer();
